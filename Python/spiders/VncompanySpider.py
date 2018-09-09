@@ -9,8 +9,8 @@ class VncompanySpider(scrapy.Spider):
     ]
 
     def parse(self, response):
-        for td in response.xpath('//table/tr[not(@bgcolor)]'):
-            if td.xpath('td[@align]'):
+        for idx, td in enumerate(response.xpath('//table/tr[not(@bgcolor)]')):
+            if td.xpath('td[@align]') or idx % 1 is not 0:
                 continue
 
             url = td.xpath('td/a/@href').extract_first()
@@ -31,7 +31,8 @@ class VncompanySpider(scrapy.Spider):
 
             yield scrapy.Request(url, callback=self.parse_company, meta={'index': indexFile})
 
-            break
+            # if idx is 200:
+            #     break
 
     def parse_company(self, response):
         indexFile = response.meta['index']
@@ -48,11 +49,13 @@ class VncompanySpider(scrapy.Spider):
         try:
             # addresses = re.findall(r"[\w']+", address)
             addresses = address.split(', ')
-            state = addresses[-1]
-            city = addresses[-2]
-            street = " ".join(addresses[:2])
+            if len(addresses) > 2:
+                state = addresses[-1]
+                city = addresses[-2]
+                street = " ".join(addresses[:2])
         except Exception as e:
             raise e
+            pass
 
         indexFile['company_state'] = state
         indexFile['company_city'] = city
@@ -61,7 +64,7 @@ class VncompanySpider(scrapy.Spider):
         phones = company_profiles[2:4]
         phone_array = []
         for phone in phones:
-            phone = phone.split(';')
+            phone = re.split('-|\/|~', phone)
             for phon in phone:
                 international_format = ""
                 international_format = "".join(re.findall(r'\d+', phon))
@@ -74,6 +77,7 @@ class VncompanySpider(scrapy.Spider):
                 phone_array.append(international_format)
 
         indexFile['company phone number'] = phone_array
+        indexFile['company phone number raw'] = " ".join(phones).strip('\n\t')
 
         email = company_profiles[4].strip('\n\t')
         indexFile['company email'] = email
@@ -89,29 +93,59 @@ class VncompanySpider(scrapy.Spider):
         indexFile['financial summary'] = financial
 
         descriptions = response.xpath('//table/tr[not(@valign)]/td[@colspan]/text()').extract()
-        lists = [3]
+        lists = []
         col = -1
         temp = []
 
         for line in descriptions:
-            if line is '\n\t\t\t\t\t\t':
-                if col > 0:
-                    lists[col] = temp
+            line = line.strip('\n\t')
+
+            if line is "":
+                if col > -1:
+                    lists.append(temp)
                     temp = []
                 col = col + 1
-                continue
             else:
                 temp.append(line.strip('\n\t'))
-        indexFile['company description'] = lists[0]
+        ##
+        indexFile['company description'] = " ".join(lists[0])
+        ##
 
         auditing = {}
-        auditing['company_name'] = lists[1][0]
-        auditing['address'] = lists[1][1]
-        for audit_description in lists[1][2:]:
-            for desc in audit_description.split(' - '):
-                key = desc.split(':')[0]
-                value = desc.split(':')[1]
-                auditing[key] = value
+
+        ##
+        if len(lists[1]) > 0:
+        ##
+            auditing['company_name'] = lists[1][0]
+            if len(lists[1]) > 1:
+                auditing['address'] = lists[1][1]
+                for audit_description in lists[1][2:]:
+                    if ' - ' not in audit_description:
+                        if ": " in audit_description:
+                            key = audit_description.split(': ')[0]
+                            value = audit_description.split(': ')[1]
+                            auditing[key] = value
+                        else:
+                            auditing['address'] = "".join(auditing['address']) + " " + audit_description
+                    else :
+                        for desc in audit_description.split(' - '):
+                            if ": " in desc:
+                                key = desc.split(": ")[0]
+                                value = desc.split(": ")[1]
+                                auditing[key] = value
         indexFile['auditing company'] = auditing
+
+        registration = {}
+        if len(lists[2]) > 0:
+            for registration_info in lists[2]:
+                print(registration_info)
+                if ':' in registration_info:
+                    try:
+                        key = registration_info.split(": ")[0]
+                        value = registration_info.split(": ")[1]
+                        registration[key] = value
+                    except Exception as e:
+                        continue
+        indexFile['business registration'] = registration
 
         return indexFile
