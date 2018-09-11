@@ -3,8 +3,13 @@ import scrapy
 import datetime
 import re
 
+# Python/spiders/VncompanySpider.py
+# Crawl URL to generate output according to Task 02
 class VncompanySpider(scrapy.Spider):
+    # Crawl name
     name = "vncompany"
+
+    #URL List
     start_urls = [
         'http://stock.vietnammarkets.com/vietnam-stock-market.php'
     ]
@@ -38,10 +43,14 @@ class VncompanySpider(scrapy.Spider):
             return string
 
     def parse(self, response):
+        # Iterate each row of index table
         for idx, td in enumerate(response.xpath('//table/tr[not(@bgcolor)]')):
-            if td.xpath('td[@align]') or idx % 1 is not 0:
+            
+            # Skip if row is not index's row
+            if td.xpath('td[@align]'):
                 continue
 
+            # Extract master data
             url = td.xpath('td/a/@href').extract_first()
             ticker = td.xpath('td/a/text()').extract_first()
             company = td.xpath('td/text()')[0].extract()
@@ -49,6 +58,8 @@ class VncompanySpider(scrapy.Spider):
             bourse = td.xpath('td/text()')[2].extract()
             crawlAt = datetime.date.today()
 
+            # Use index_file to generate output file
+            # Add master data to index_file
             index_file = {
                 'ticker symbol':ticker, 
                 'company name':company, 
@@ -58,25 +69,30 @@ class VncompanySpider(scrapy.Spider):
                 'Listing bourse':bourse
                 }
 
+            # Parse index_file to parse_company function
+            # Capture return of updated index_file with detail data
+            # Yield index_file
             yield scrapy.Request(url, callback=self.parse_company, meta={'index': index_file})
 
-            # if idx is 2:
-            #     break
-
+    # Function to parse detail data
     def parse_company(self, response):
+        # Get master data in index_file
         index_file = response.meta['index']
-        company_profiles = response.xpath('//table/tr[@valign]/td[@width]/text()').extract()
 
-        # trans_table = {ord(c): None for c in u'\r\n\t'}
-        # address = ''.join(s.strip().translate(trans_table) for s in company_profiles[1])
+        # Extract company address
+        company_profiles = response.xpath('//table/tr[@valign]/td[@width]/text()').extract()
         address = company_profiles[1].strip('\n\t')
+
         index_file['company_address'] = address
         index_file['country'] = "Vietnam"
+
+        # Go for bonus point
         state = ""
         city = ""
         street = ""
+
+        # Split address into street, city and state
         try:
-            # addresses = re.findall(r"[\w']+", address)
             addresses = address.split(', ')
             if len(addresses) > 2:
                 state = addresses[-1]
@@ -90,35 +106,48 @@ class VncompanySpider(scrapy.Spider):
         index_file['company_city'] = city
         index_file['company_street'] = street
 
+        # Extract company phones
         phones = company_profiles[2:4]
         phone_array = []
         for phone in phones:
             phone = re.split('-|\/|~', phone)
             for phon in phone:
+                # Go for bonus point
                 international_format = ""
                 international_format = "".join(re.findall(r'\d+', phon))
-                # international_format = "".join(international_format)
+
+                # International format for Vietnam phone number
+                # starts with +84
+                # without 0 prefix
                 if international_format.startswith("0"):
                     international_format = international_format[1:]
                 if not international_format.startswith("84"):
                     international_format = "84"+international_format
+                
                 international_format = "+"+international_format
-                phone_array.append(international_format)
+                
+                if international_format is not "+84":
+                    phone_array.append(international_format)
 
         index_file['company phone number'] = phone_array
+        # Save raw phone number for next improvement
         index_file['company phone number raw'] = " ".join(phones).strip('\n\t')
 
+        # Extract company email
         email = company_profiles[4].strip('\n\t')
         index_file['company email'] = email
 
+        # Extract company website
         website = company_profiles[5].strip('\n\t')
         index_file['company website'] = website
 
+        # Extract company financial summary
         financial = {}
         for tr in response.xpath('//table/tr[@valign]/td[@width]/table/tr'):
             key = tr.xpath('td/strong/text()').extract_first().strip(':')
             value = tr.xpath('td/text()').extract_first()
 
+            # Validate value and convert it to integer
             if self.is_number(value):
                 if self.is_date(value) is False:
                     value = self.convert_to_number(value)
@@ -126,11 +155,19 @@ class VncompanySpider(scrapy.Spider):
             financial[key] = value
         index_file['financial summary'] = financial
 
+        # Extract company other information
         descriptions = response.xpath('//table/tr[not(@valign)]/td[@colspan]/text()').extract()
         lists = []
         col = -1
         temp = []
 
+        # Split table into these data:
+        # Company description
+        # Company auditing company
+        # Company business registration information
+        #
+        # TODO
+        # Review company with <p> element
         for line in descriptions:
             line = line.strip('\n\t')
 
@@ -142,26 +179,36 @@ class VncompanySpider(scrapy.Spider):
             else:
                 temp.append(line.strip('\n\t'))
         
+        # Extract company description/summary
         if len(lists) > 0:
             index_file['company description'] = " ".join(lists[0])
 
+            # Extract company auditing company
             auditing = {}
 
             if len(lists) > 1:
+
                 if len(lists[1]) > 0:
+
                     auditing['company_name'] = lists[1][0]
+                    
                     if len(lists[1]) > 1:
                         auditing['address'] = lists[1][1]
+                        
                         for audit_description in lists[1][2:]:
+                            
                             if ' - ' not in audit_description:
+                                
                                 if ": " in audit_description:
                                     key = audit_description.split(': ')[0]
                                     value = audit_description.split(': ')[1]
                                     auditing[key] = value
                                 else:
                                     auditing['address'] = "".join(auditing['address']) + " " + audit_description
+                            
                             else :
                                 for desc in audit_description.split(' - '):
+                                    
                                     if ": " in desc:
                                         key = desc.split(": ")[0]
                                         value = desc.split(": ")[1]
@@ -170,11 +217,14 @@ class VncompanySpider(scrapy.Spider):
             index_file['auditing company'] = auditing
 
 
+            # Extract company registration business information
             registration = {}
             if len(lists) > 2:
+
                 if len(lists[2]) > 0:
+
                     for registration_info in lists[2]:
-                        print(registration_info)
+                        
                         if ':' in registration_info:
                             try:
                                 key = registration_info.split(": ")[0]
@@ -185,8 +235,10 @@ class VncompanySpider(scrapy.Spider):
 
             index_file['business registration'] = registration
         else:
+            # Return empty object when data not available
             index_file['company description'] = {}
             index_file['auditing company'] = {}
             index_file['business registration'] = {}
 
+        # Return updated index_file with master dat
         return index_file
